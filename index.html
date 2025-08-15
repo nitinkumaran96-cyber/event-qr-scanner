@@ -1,155 +1,179 @@
 <!DOCTYPE html>
-<html>
+<html lang="en">
 <head>
-  <title>QR Event Scanner</title>
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <script src="https://unpkg.com/html5-qrcode"></script>
-  <script src="https://apis.google.com/js/api.js"></script>
-  <style>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Event QR Scanner</title>
+<style>
     body {
-      font-family: Arial, sans-serif;
-      margin: 0;
-      background: #f0f0f0;
-      text-align: center;
+        font-family: Arial, sans-serif;
+        background: #121212;
+        color: white;
+        margin: 0;
+        padding: 0;
+        display: flex;
+        flex-direction: column;
+        align-items: center;
     }
-    #signin-container {
-      margin-top: 30px;
+    #signin-button {
+        margin-top: 20px;
     }
-    #reader {
-      width: 300px;
-      height: 300px;
-      margin: 20px auto;
-      display: none;
+    #scanner-container {
+        position: relative;
+        width: 90vw;
+        max-width: 400px;
+        aspect-ratio: 1 / 1;
+        margin-top: 20px;
+        border: 2px solid #00ff99;
+        display: none;
     }
-    .banner {
-      padding: 10px;
-      color: white;
-      font-weight: bold;
-      display: none;
-      margin: 10px auto;
-      width: 90%;
-      border-radius: 5px;
+    video {
+        width: 100%;
+        height: 100%;
+        object-fit: cover;
     }
-    .success { background: green; }
-    .warning { background: goldenrod; }
-    .error { background: red; }
-  </style>
+    #result-banner {
+        margin-top: 20px;
+        padding: 10px;
+        font-size: 18px;
+        text-align: center;
+        border-radius: 8px;
+        display: none;
+    }
+    .green { background: #28a745; }
+    .yellow { background: #ffc107; color: black; }
+    .red { background: #dc3545; }
+</style>
+<script src="https://accounts.google.com/gsi/client" async defer></script>
+<script src="https://apis.google.com/js/api.js"></script>
+<script src="https://unpkg.com/html5-qrcode"></script>
 </head>
 <body>
-  <h2>QR Event Scanner</h2>
-  <div id="signin-container">
-    <button id="signin-button">Sign in with Google</button>
-  </div>
-  <div id="reader"></div>
-  <div id="banner" class="banner"></div>
 
-  <audio id="beep-sound" src="beep.mp3"></audio>
-  <audio id="done-sound" src="done.mp3"></audio>
-  <audio id="error-sound" src="error.mp3"></audio>
+<h1>Event QR Scanner</h1>
+<div id="signin-button"></div>
 
-  <script>
-    const CLIENT_ID = "761888524341-ntav1kdh5uad0rdcarpb5n7pg7brln92.apps.googleusercontent.com";
-    const API_KEY = "AIzaSyCX7SKx2y106S5j4yfnORakKmpAIhEoCtI";
-    const SPREADSHEET_ID = "1PHBW9iRt6I26-YAKi-_AwkCZo-NlktJCQalJHfw-s0M";
-    const RANGE = "cleaneddata!A:Z";
+<div id="scanner-container">
+    <div id="reader"></div>
+</div>
 
-    let scanningPaused = false;
+<div id="result-banner"></div>
 
-    function showBanner(message, type) {
-      const banner = document.getElementById("banner");
-      banner.textContent = message;
-      banner.className = "banner " + type;
-      banner.style.display = "block";
-    }
+<audio id="beep-sound" src="beep.mp3"></audio>
+<audio id="done-sound" src="done.mp3"></audio>
+<audio id="error-sound" src="error.mp3"></audio>
 
-    function hideBanner() {
-      document.getElementById("banner").style.display = "none";
-    }
+<script>
+const CLIENT_ID = "761888524341-ntav1kdh5uad0rdcarpb5n7pg7brln92.apps.googleusercontent.com";
+const API_KEY = "AIzaSyCX7SKx2y106S5j4yfnORakKmpAIhEoCtI";
+const SPREADSHEET_ID = "1PHBW9iRt6I26-YAKi-_AwkCZo-NlktJCQalJHfw-s0M";
+const RANGE = "CleanedData!A:Z"; // Adjust if needed
+const SERIAL_COL_HEADER = "Serial Number";
 
-    function beepAndVibrate(audioId) {
-      document.getElementById(audioId).play();
-      if (navigator.vibrate) navigator.vibrate(200);
-    }
+let scannedRecently = false;
+let sheetData = [];
+let signedIn = false;
 
-    function initClient() {
-      gapi.client.init({
+function initClient() {
+    gapi.client.init({
         apiKey: API_KEY,
         clientId: CLIENT_ID,
         discoveryDocs: ["https://sheets.googleapis.com/$discovery/rest?version=v4"],
         scope: "https://www.googleapis.com/auth/spreadsheets"
-      }).then(() => {
-        document.getElementById("signin-button").onclick = () => {
-          gapi.auth2.getAuthInstance().signIn().then(() => {
-            document.getElementById("signin-container").style.display = "none";
-            document.getElementById("reader").style.display = "block";
-            startScanner();
-          });
-        };
-      });
-    }
+    }).then(() => {
+        document.getElementById("signin-button").innerHTML = '<button onclick="handleAuthClick()">Sign in with Google</button>';
+    });
+}
 
-    function startScanner() {
-      const html5QrCode = new Html5Qrcode("reader");
-      const config = { fps: 10, qrbox: { width: 250, height: 250 } };
+function handleAuthClick() {
+    gapi.auth2.getAuthInstance().signIn().then(() => {
+        signedIn = true;
+        loadSheetData();
+    });
+}
 
-      html5QrCode.start({ facingMode: "environment" }, config, qrCodeMessage => {
-        if (!scanningPaused) {
-          scanningPaused = true;
-          beepAndVibrate("beep-sound");
-          checkSerialNumber(qrCodeMessage.trim());
-          setTimeout(() => {
-            hideBanner();
-            scanningPaused = false;
-          }, 2000);
-        }
-      }).catch(err => {
-        console.error("Camera start error:", err);
-      });
-    }
-
-    function checkSerialNumber(serial) {
-      gapi.client.sheets.spreadsheets.values.get({
+function loadSheetData() {
+    gapi.client.sheets.spreadsheets.values.get({
         spreadsheetId: SPREADSHEET_ID,
         range: RANGE
-      }).then(response => {
+    }).then(response => {
         const rows = response.result.values;
-        if (rows && rows.length > 0) {
-          const header = rows[0];
-          const serialIndex = header.indexOf("Serial Number");
-          const checkinIndex = header.indexOf("Checked In");
-
-          let found = false;
-          for (let i = 1; i < rows.length; i++) {
-            if (rows[i][serialIndex] === serial) {
-              found = true;
-              if (rows[i][checkinIndex] && rows[i][checkinIndex].toLowerCase() === "yes") {
-                beepAndVibrate("done-sound");
-                showBanner("Guest has already checked in", "warning");
-              } else {
-                rows[i][checkinIndex] = "Yes";
-                gapi.client.sheets.spreadsheets.values.update({
-                  spreadsheetId: SPREADSHEET_ID,
-                  range: `cleaneddata!${String.fromCharCode(65 + checkinIndex)}${i + 1}`,
-                  valueInputOption: "RAW",
-                  values: [["Yes"]]
-                }).then(() => {
-                  beepAndVibrate("done-sound");
-                  showBanner("Checked in successfully", "success");
-                });
-              }
-              break;
-            }
-          }
-          if (!found) {
-            beepAndVibrate("error-sound");
-            showBanner("Guest not registered", "error");
-          }
+        if (rows.length) {
+            const headers = rows[0];
+            const serialIndex = headers.indexOf(SERIAL_COL_HEADER);
+            const checkedInIndex = headers.indexOf("Checked In");
+            sheetData = rows.slice(1).map(row => ({
+                serial: row[serialIndex],
+                checkedIn: row[checkedInIndex]
+            }));
+            startScanner();
         }
-      });
-    }
+    });
+}
 
-    gapi.load("client:auth2", initClient);
-  </script>
+function startScanner() {
+    document.getElementById("scanner-container").style.display = "block";
+    const html5QrCode = new Html5Qrcode("reader");
+    html5QrCode.start(
+        { facingMode: "environment" },
+        { fps: 10, qrbox: { width: 250, height: 250 } },
+        qrCodeMessage => {
+            if (!scannedRecently) {
+                scannedRecently = true;
+                handleScan(qrCodeMessage);
+                setTimeout(() => scannedRecently = false, 2000);
+            }
+        }
+    );
+}
+
+function handleScan(data) {
+    navigator.vibrate?.(200);
+    document.getElementById("beep-sound").play();
+    const match = sheetData.find(row => row.serial === data);
+    const banner = document.getElementById("result-banner");
+    banner.style.display = "block";
+    if (match) {
+        if (match.checkedIn && match.checkedIn.toLowerCase() === "yes") {
+            banner.textContent = "Already Checked In";
+            banner.className = "yellow";
+            document.getElementById("done-sound").play();
+        } else {
+            banner.textContent = "Checked In Successfully!";
+            banner.className = "green";
+            document.getElementById("done-sound").play();
+            // Update Google Sheet
+            updateCheckIn(match.serial);
+        }
+    } else {
+        banner.textContent = "Not Registered";
+        banner.className = "red";
+        document.getElementById("error-sound").play();
+    }
+}
+
+function updateCheckIn(serial) {
+    gapi.client.sheets.spreadsheets.values.get({
+        spreadsheetId: SPREADSHEET_ID,
+        range: RANGE
+    }).then(response => {
+        const rows = response.result.values;
+        const serialIndex = rows[0].indexOf(SERIAL_COL_HEADER);
+        const checkedInIndex = rows[0].indexOf("Checked In");
+        const rowIndex = rows.findIndex(row => row[serialIndex] === serial);
+        if (rowIndex > -1) {
+            rows[rowIndex][checkedInIndex] = "Yes";
+            gapi.client.sheets.spreadsheets.values.update({
+                spreadsheetId: SPREADSHEET_ID,
+                range: `CleanedData!${String.fromCharCode(65 + checkedInIndex)}${rowIndex + 1}`,
+                valueInputOption: "RAW",
+                resource: { values: [["Yes"]] }
+            }).then(() => console.log("Check-in updated"));
+        }
+    });
+}
+
+gapi.load("client:auth2", initClient);
+</script>
 </body>
 </html>
-
