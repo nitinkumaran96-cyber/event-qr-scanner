@@ -143,7 +143,7 @@
     }
 </style>
 <script src="https://unpkg.com/html5-qrcode"></script>
-<script src="https://accounts.google.com/gsi/client" async defer></script>
+<!-- Google APIs will be loaded dynamically by our code -->
 </head>
 <body>
 
@@ -179,6 +179,9 @@
     <button onclick="testAudio()" style="margin-left: 10px; padding: 5px 10px; background: #00ff99; color: #121212; border: none; border-radius: 4px; cursor: pointer;">
         Test Audio
     </button>
+    <button onclick="initializeAudio()" style="margin-left: 10px; padding: 5px 10px; background: #ffc107; color: #121212; border: none; border-radius: 4px; cursor: pointer;">
+        Initialize Audio
+    </button>
 </div>
 
 <!-- Audio files -->
@@ -213,6 +216,62 @@ let checkedInIndex = -1;
 
 // Initialize Google Identity Services
 function initGIS() {
+    // Check if Google APIs are available
+    if (typeof google === 'undefined') {
+        showStatus("Loading Google APIs...", "info");
+        // Try to load Google APIs manually
+        loadGoogleAPIs().then(() => {
+            initGISActual();
+        }).catch(error => {
+            showStatus("Failed to load Google APIs. Please refresh the page.", "error");
+            console.error("Google API loading error:", error);
+        });
+    } else {
+        initGISActual();
+    }
+}
+
+// Load Google APIs manually
+function loadGoogleAPIs() {
+    return new Promise((resolve, reject) => {
+        // Load GAPI first
+        if (typeof gapi === 'undefined') {
+            const gapiScript = document.createElement('script');
+            gapiScript.src = 'https://apis.google.com/js/api.js';
+            gapiScript.onload = () => {
+                console.log("GAPI loaded successfully");
+                // Now load Google Identity
+                loadGoogleIdentity().then(resolve).catch(reject);
+            };
+            gapiScript.onerror = () => reject(new Error("Failed to load GAPI"));
+            document.head.appendChild(gapiScript);
+        } else {
+            loadGoogleIdentity().then(resolve).catch(reject);
+        }
+    });
+}
+
+// Load Google Identity Services
+function loadGoogleIdentity() {
+    return new Promise((resolve, reject) => {
+        if (typeof google !== 'undefined') {
+            resolve();
+            return;
+        }
+        
+        const gisScript = document.createElement('script');
+        gisScript.src = 'https://accounts.google.com/gsi/client';
+        gisScript.onload = () => {
+            console.log("Google Identity Services loaded successfully");
+            resolve();
+        };
+        gisScript.onerror = () => reject(new Error("Failed to load Google Identity Services"));
+        document.head.appendChild(gisScript);
+    });
+}
+
+// Actual GIS initialization
+function initGISActual() {
     try {
         tokenClient = google.accounts.oauth2.initTokenClient({
             client_id: CLIENT_ID,
@@ -220,6 +279,7 @@ function initGIS() {
             callback: handleTokenResponse
         });
         showStatus("Ready to sign in", "info");
+        console.log("Google services initialized successfully");
     } catch (error) {
         showStatus("Failed to initialize Google services", "error");
         console.error("GIS initialization error:", error);
@@ -228,6 +288,9 @@ function initGIS() {
 
 // Handle sign-in button click
 function handleSignIn() {
+    // Initialize audio on first user interaction
+    initializeAudio();
+    
     if (!tokenClient) {
         showStatus("Google services not ready. Please refresh the page.", "error");
         return;
@@ -247,6 +310,42 @@ function handleSignIn() {
         resetSignInButton();
         console.error("Sign-in error:", error);
     }
+}
+
+// Initialize audio (must be called after user interaction)
+function initializeAudio() {
+    const audioIds = ['beep-sound', 'done-sound', 'error-sound'];
+    
+    audioIds.forEach(id => {
+        const audio = document.getElementById(id);
+        if (audio) {
+            // Set volume and ensure not muted
+            audio.volume = 0.7;
+            audio.muted = false;
+            
+            // Try to load the audio
+            audio.load();
+            
+            // Try a silent play to unlock audio context (mobile requirement)
+            const originalVolume = audio.volume;
+            audio.volume = 0;
+            const playPromise = audio.play();
+            
+            if (playPromise !== undefined) {
+                playPromise
+                    .then(() => {
+                        audio.pause();
+                        audio.currentTime = 0;
+                        audio.volume = originalVolume;
+                        console.log(`Audio ${id} initialized successfully`);
+                    })
+                    .catch(error => {
+                        audio.volume = originalVolume;
+                        console.log(`Audio ${id} initialization failed:`, error);
+                    });
+            }
+        }
+    });
 }
 
 // Handle token response
@@ -664,13 +763,37 @@ function testAudio() {
     audioIds.forEach(id => {
         const audio = document.getElementById(id);
         if (audio) {
+            console.log(`Testing ${id}...`);
+            
+            // Create a promise to handle audio play
+            const playPromise = audio.play();
+            
+            if (playPromise !== undefined) {
+                playPromise
+                    .then(() => {
+                        console.log(`✅ ${id} played successfully`);
+                        // Stop after a short time
+                        setTimeout(() => audio.pause(), 500);
+                    })
+                    .catch(error => {
+                        console.error(`❌ ${id} failed to play:`, error);
+                        showStatus(`Audio ${id} failed: ${error.message}`, "error");
+                    });
+            }
+            
             console.log(`${id}:`, {
                 src: audio.src,
                 readyState: audio.readyState,
-                canPlay: audio.readyState >= 2
+                canPlay: audio.readyState >= 2,
+                volume: audio.volume,
+                muted: audio.muted
             });
+        } else {
+            console.error(`Audio element ${id} not found`);
         }
     });
+    
+    showStatus("Audio test completed - check console for details", "info");
 }
 
 // Handle page visibility change to manage camera
