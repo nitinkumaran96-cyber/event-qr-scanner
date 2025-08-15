@@ -25,12 +25,11 @@
         aspect-ratio: 1 / 1;
         margin-top: 20px;
         border: 2px solid #00ff99;
-        display: none;
+        display: none; /* hidden until sign-in */
     }
-    video {
+    #reader {
         width: 100%;
         height: 100%;
-        object-fit: cover;
     }
     #result-banner {
         margin-top: 20px;
@@ -44,8 +43,9 @@
     .yellow { background: #ffc107; color: black; }
     .red { background: #dc3545; }
 </style>
-<script src="https://unpkg.com/html5-qrcode"></script>
 <script src="https://accounts.google.com/gsi/client" async defer></script>
+<script src="https://apis.google.com/js/api.js"></script>
+<script src="https://unpkg.com/html5-qrcode"></script>
 </head>
 <body>
 
@@ -63,7 +63,7 @@
 <audio id="error-sound" src="ErrorSound.mp3"></audio>
 
 <script>
-const CLIENT_ID = "761888524341-ntav1kdh5uad0rdcarpb5n7pg7brln92.apps.googleusercontent.com";
+const CLIENT_ID = "61888524341-ntav1kdh5uad0rdcarpb5n7pg7brln92.apps.googleusercontent.com";
 const API_KEY = "AIzaSyCX7SKx2y106S5j4yfnORakKmpAIhEoCtI";
 const SPREADSHEET_ID = "1PHBW9iRt6I26-YAKi-_AwkCZo-NlktJCQalJHfw-s0M";
 const RANGE = "CleanedData!A:Z";
@@ -72,68 +72,73 @@ const SERIAL_COL_HEADER = "Serial Number";
 let scannedRecently = false;
 let sheetData = [];
 let signedIn = false;
-let tokenClient;
 
-function handleCredentialResponse(response) {
-    signedIn = true;
-    loadSheetData();
-}
-
-function initGIS() {
-    tokenClient = google.accounts.oauth2.initTokenClient({
-        client_id: CLIENT_ID,
-        scope: "https://www.googleapis.com/auth/spreadsheets",
-        callback: (resp) => {
-            if (resp.access_token) {
-                signedIn = true;
-                loadSheetData();
-            }
-        }
+// Initialize Google API client
+function initClient() {
+    gapi.client.init({
+        apiKey: API_KEY,
+        clientId: CLIENT_ID,
+        discoveryDocs: ["https://sheets.googleapis.com/$discovery/rest?version=v4"],
+        scope: "https://www.googleapis.com/auth/spreadsheets"
+    }).then(() => {
+        document.getElementById("signin-button").innerHTML = '<button id="authBtn">Sign in with Google</button>';
+        document.getElementById("authBtn").addEventListener("click", handleAuthClick);
     });
-
-    const signinButton = document.getElementById("signin-button");
-    signinButton.innerHTML = '<button onclick="tokenClient.requestAccessToken()">Sign in with Google</button>';
 }
 
+// Handle sign-in
+function handleAuthClick() {
+    gapi.auth2.getAuthInstance().signIn().then(() => {
+        signedIn = true;
+        document.getElementById("signin-button").style.display = "none";
+        loadSheetData();
+    }).catch(err => console.error("Sign-in failed:", err));
+}
+
+// Load sheet data
 function loadSheetData() {
-    gapi.load('client', () => {
-        gapi.client.init({ apiKey: API_KEY }).then(() => {
-            gapi.client.sheets.spreadsheets.values.get({
-                spreadsheetId: SPREADSHEET_ID,
-                range: RANGE
-            }).then(response => {
-                const rows = response.result.values;
-                if (rows.length) {
-                    const headers = rows[0];
-                    const serialIndex = headers.indexOf(SERIAL_COL_HEADER);
-                    const checkedInIndex = headers.indexOf("Checked In");
-                    sheetData = rows.slice(1).map(row => ({
-                        serial: row[serialIndex],
-                        checkedIn: row[checkedInIndex]
-                    }));
-                    startScanner();
-                }
-            });
-        });
-    });
-}
-
-function startScanner() {
-    document.getElementById("scanner-container").style.display = "block";
-    const html5QrCode = new Html5Qrcode("reader");
-    html5QrCode.start(
-        { facingMode: "environment" },
-        { fps: 10, qrbox: { width: 250, height: 250 } },
-        qrCodeMessage => {
-            if (!scannedRecently) {
-                scannedRecently = true;
-                handleScan(qrCodeMessage);
-                setTimeout(() => scannedRecently = false, 2000);
-            }
+    gapi.client.sheets.spreadsheets.values.get({
+        spreadsheetId: SPREADSHEET_ID,
+        range: RANGE
+    }).then(response => {
+        const rows = response.result.values;
+        if (rows.length) {
+            const headers = rows[0];
+            const serialIndex = headers.indexOf(SERIAL_COL_HEADER);
+            const checkedInIndex = headers.indexOf("Checked In");
+            sheetData = rows.slice(1).map(row => ({
+                serial: row[serialIndex],
+                checkedIn: row[checkedInIndex]
+            }));
+            startScanner();
         }
-    );
+    }).catch(err => console.error("Failed to load sheet data:", err));
 }
 
+// Start the QR scanner
+function startScanner() {
+    const container = document.getElementById("scanner-container");
+    container.style.display = "block";
+    setTimeout(() => { // slight delay ensures DOM is ready
+        const html5QrCode = new Html5Qrcode("reader");
+        html5QrCode.start(
+            { facingMode: "environment" },
+            { fps: 10, qrbox: { width: 250, height: 250 } },
+            qrCodeMessage => {
+                if (!scannedRecently) {
+                    scannedRecently = true;
+                    handleScan(qrCodeMessage);
+                    setTimeout(() => scannedRecently = false, 2000);
+                }
+            },
+            errorMessage => {
+                // optional: console.warn(errorMessage);
+            }
+        );
+    }, 100);
+}
+
+// Handle scan result
 function handleScan(data) {
     navigator.vibrate?.(200);
     document.getElementById("beep-sound").play();
@@ -158,17 +163,18 @@ function handleScan(data) {
     }
 }
 
+// Update Google Sheet
 function updateCheckIn(serial) {
     gapi.client.sheets.spreadsheets.values.get({
         spreadsheetId: SPREADSHEET_ID,
         range: RANGE
     }).then(response => {
         const rows = response.result.values;
-        const serialIndex = rows[0].indexOf(SERIAL_COL_HEADER);
-        const checkedInIndex = rows[0].indexOf("Checked In");
-        const rowIndex = rows.findIndex(row => row[serialIndex] === serial);
-        if (rowIndex > -1) {
-            rows[rowIndex][checkedInIndex] = "Yes";
+        const headers = rows[0];
+        const serialIndex = headers.indexOf(SERIAL_COL_HEADER);
+        const checkedInIndex = headers.indexOf("Checked In");
+        const rowIndex = rows.findIndex(row => row[serialIndex] === serial) + 1;
+        if (rowIndex > 0) {
             gapi.client.sheets.spreadsheets.values.update({
                 spreadsheetId: SPREADSHEET_ID,
                 range: `CleanedData!${String.fromCharCode(65 + checkedInIndex)}${rowIndex + 1}`,
@@ -176,10 +182,12 @@ function updateCheckIn(serial) {
                 resource: { values: [["Yes"]] }
             }).then(() => console.log("Check-in updated"));
         }
-    });
+    }).catch(err => console.error("Failed to update check-in:", err));
 }
 
-window.onload = initGIS;
+// Load client
+gapi.load("client:auth2", initClient);
 </script>
+
 </body>
 </html>
